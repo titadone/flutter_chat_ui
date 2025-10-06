@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_chat_core/flutter_chat_core.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:http/http.dart' as http;
 
 /// Theme values for [FlyerChatAudioMessage].
 typedef _LocalTheme = ({
@@ -79,6 +83,15 @@ class FlyerChatAudioMessage extends StatefulWidget {
   /// The widget to display on top of the message.
   final Widget? topWidget;
 
+  /// Whether to show the download button.
+  final bool showDownloadButton;
+
+  /// Callback when download is completed.
+  final Function(String filePath)? onDownloadComplete;
+
+  /// Callback when download fails.
+  final Function(String error)? onDownloadError;
+
   /// Creates a widget to display an audio message.
   const FlyerChatAudioMessage({
     super.key,
@@ -101,6 +114,9 @@ class FlyerChatAudioMessage extends StatefulWidget {
     this.timeAndStatusPosition = TimeAndStatusPosition.end,
     this.headers,
     this.topWidget,
+    this.showDownloadButton = true,
+    this.onDownloadComplete,
+    this.onDownloadError,
   });
 
   @override
@@ -115,6 +131,7 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
 
   bool _isPlaying = false;
   bool _isLoading = false;
+  bool _isDownloading = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
@@ -127,6 +144,12 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
   }
 
   void _setupAudioPlayer() {
+    // Configure audio player to reduce crackling
+    _audioPlayer.setAudioSource(
+      AudioSource.uri(Uri.parse('')),
+      preload: false,
+    );
+
     // Listen to position changes
     _positionSubscription = _audioPlayer.positionStream.listen((position) {
       if (mounted) {
@@ -145,7 +168,9 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
 
         // Update duration when available
         if (_audioPlayer.duration != null && _duration != _audioPlayer.duration!) {
-          _duration = _audioPlayer.duration!;
+          setState(() {
+            _duration = _audioPlayer.duration!;
+          });
         }
       }
     });
@@ -165,7 +190,13 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
         await _audioPlayer.pause();
       } else {
         if (_audioPlayer.processingState == ProcessingState.idle) {
-          await _audioPlayer.setUrl(widget.message.source);
+          // Add a small delay to prevent crackling
+          await _audioPlayer.setUrl(
+            widget.message.source,
+            headers: widget.headers,
+          );
+          // Wait a bit for the audio to be ready
+          await Future.delayed(const Duration(milliseconds: 100));
         }
         await _audioPlayer.play();
       }
@@ -181,6 +212,86 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
     } catch (e) {
       debugPrint('Error seeking audio: $e');
     }
+  }
+
+  Future<void> _downloadAudio() async {
+    if (_isDownloading) return;
+
+    setState(() => _isDownloading = true);
+
+    try {
+      // Request storage permission
+      final status = await Permission.storage.request();
+      if (!status.isGranted) {
+        widget.onDownloadError?.call('Permission de stockage refusée');
+        return;
+      }
+
+      // Get download directory
+      Directory? directory;
+      if (Platform.isAndroid) {
+        directory = await getExternalStorageDirectory();
+      } else {
+        directory = await getApplicationDocumentsDirectory();
+      }
+
+      if (directory == null) {
+        widget.onDownloadError?.call('Impossible d\'accéder au répertoire de téléchargement');
+        return;
+      }
+
+      // Create filename
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filename = 'audio_$timestamp.${_getFileExtension(widget.message.source)}';
+      final filePath = '${directory.path}/$filename';
+
+      // Download file
+      final response = await http.get(
+        Uri.parse(widget.message.source),
+        headers: widget.headers,
+      );
+
+      if (response.statusCode == 200) {
+        final file = File(filePath);
+        await file.writeAsBytes(response.bodyBytes);
+        widget.onDownloadComplete?.call(filePath);
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Audio téléchargé avec succès'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        widget.onDownloadError?.call('Erreur de téléchargement: ${response.statusCode}');
+      }
+    } catch (e) {
+      widget.onDownloadError?.call('Erreur: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur de téléchargement: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloading = false);
+      }
+    }
+  }
+
+  String _getFileExtension(String url) {
+    final uri = Uri.parse(url);
+    final path = uri.path;
+    final lastDot = path.lastIndexOf('.');
+    if (lastDot != -1 && lastDot < path.length - 1) {
+      return path.substring(lastDot + 1);
+    }
+    return 'mp3'; // Default extension
   }
 
   @override
@@ -237,6 +348,10 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
                       ],
                     ),
                   ),
+                  if (widget.showDownloadButton) ...[
+                    const SizedBox(width: 8),
+                    _buildDownloadButton(isSentByMe, theme),
+                  ],
                 ],
               ),
             ],
@@ -296,11 +411,43 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
-          _formatDuration(_isPlaying ? _position : _duration),
+          _formatDurationWithTotal(_position, _duration),
           style: widget.timeStyle,
         ),
         if (timeAndStatus != null) timeAndStatus,
       ],
+    );
+  }
+
+  Widget _buildDownloadButton(bool isSentByMe, _LocalTheme theme) {
+    final buttonColor = isSentByMe
+        ? (widget.sentButtonColor ?? theme.onPrimary)
+        : (widget.receivedButtonColor ?? theme.onSurface);
+
+    return GestureDetector(
+      onTap: _isDownloading ? null : _downloadAudio,
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: buttonColor.withOpacity(0.1),
+          shape: BoxShape.circle,
+        ),
+        child: _isDownloading
+            ? SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  color: buttonColor,
+                  strokeWidth: 2,
+                ),
+              )
+            : Icon(
+                Icons.download,
+                color: buttonColor,
+                size: 16,
+              ),
+      ),
     );
   }
 
@@ -330,6 +477,12 @@ class _FlyerChatAudioMessageState extends State<FlyerChatAudioMessage>
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
     return '${minutes.toString().padLeft(1, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDurationWithTotal(Duration position, Duration total) {
+    final positionStr = _formatDuration(position);
+    final totalStr = _formatDuration(total);
+    return '$positionStr / $totalStr';
   }
 }
 
