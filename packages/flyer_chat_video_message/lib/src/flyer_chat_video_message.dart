@@ -145,7 +145,13 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
         httpHeaders: widget.headers ?? {},
       );
 
-      await _videoController!.initialize();
+      // Add timeout to prevent infinite loading
+      await _videoController!.initialize().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw Exception('Timeout: La vidéo met trop de temps à charger');
+        },
+      );
 
       if (mounted) {
         setState(() {
@@ -155,25 +161,46 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
         });
 
         _videoController!.addListener(_videoListener);
+        
+        // Check if video has valid duration
+        if (_duration == Duration.zero) {
+          debugPrint('Warning: Video duration is zero');
+        }
       }
     } catch (e) {
       debugPrint('Error initializing video: $e');
       if (mounted) {
         setState(() {
           _hasError = true;
-          _errorMessage = 'Erreur de chargement de la vidéo';
+          _errorMessage = e.toString().contains('Timeout')
+              ? 'La vidéo met trop de temps à charger'
+              : 'Erreur de chargement de la vidéo: ${e.toString()}';
         });
       }
     }
   }
 
   void _videoListener() {
-    if (!mounted) return;
+    if (!mounted || _videoController == null) return;
+
+    final value = _videoController!.value;
+    
+    // Check for errors in video playback
+    if (value.hasError) {
+      debugPrint('Video playback error: ${value.errorDescription}');
+      setState(() {
+        _hasError = true;
+        _errorMessage = 'Erreur de lecture: ${value.errorDescription}';
+      });
+      return;
+    }
 
     setState(() {
-      _isPlaying = _videoController!.value.isPlaying;
-      _position = _videoController!.value.position;
-      _duration = _videoController!.value.duration;
+      _isPlaying = value.isPlaying;
+      _position = value.position;
+      if (value.duration != Duration.zero) {
+        _duration = value.duration;
+      }
     });
   }
 
