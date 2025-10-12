@@ -235,6 +235,18 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
     }
   }
 
+  void _openFullscreen() {
+    if (!_isInitialized || _videoController == null) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => _FullscreenVideoPlayer(
+          controller: _videoController!,
+        ),
+      ),
+    );
+  }
+
   Future<void> _downloadVideo() async {
     if (_isDownloading) return;
 
@@ -426,7 +438,7 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
         : videoHeight;
 
     return GestureDetector(
-      onTap: _togglePlayPause,
+      onTap: _openFullscreen,
       child: Container(
         width: videoWidth,
         height: constrainedHeight,
@@ -646,6 +658,155 @@ class TimeAndStatus extends StatelessWidget {
           else
             Icon(getIconForStatus(status!), color: textStyle?.color, size: 12),
       ],
+    );
+  }
+}
+
+/// A fullscreen video player widget.
+class _FullscreenVideoPlayer extends StatefulWidget {
+  final VideoPlayerController controller;
+
+  const _FullscreenVideoPlayer({
+    required this.controller,
+  });
+
+  @override
+  State<_FullscreenVideoPlayer> createState() => _FullscreenVideoPlayerState();
+}
+
+class _FullscreenVideoPlayerState extends State<_FullscreenVideoPlayer> {
+  bool _showControls = true;
+  Timer? _hideControlsTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _startHideControlsTimer();
+  }
+
+  @override
+  void dispose() {
+    _hideControlsTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startHideControlsTimer() {
+    _hideControlsTimer?.cancel();
+    _hideControlsTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() => _showControls = false);
+      }
+    });
+  }
+
+  void _toggleControls() {
+    setState(() => _showControls = !_showControls);
+    if (_showControls) {
+      _startHideControlsTimer();
+    }
+  }
+
+  Future<void> _togglePlayPause() async {
+    if (widget.controller.value.isPlaying) {
+      await widget.controller.pause();
+    } else {
+      await widget.controller.play();
+    }
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: _toggleControls,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: AspectRatio(
+                aspectRatio: widget.controller.value.aspectRatio,
+                child: VideoPlayer(widget.controller),
+              ),
+            ),
+            if (_showControls)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withValues(alpha: 0.7),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                  child: SafeArea(
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                        const Spacer(),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (_showControls)
+              Center(
+                child: IconButton(
+                  iconSize: 64,
+                  icon: Icon(
+                    widget.controller.value.isPlaying
+                        ? Icons.pause_circle_filled
+                        : Icons.play_circle_filled,
+                    color: Colors.white,
+                  ),
+                  onPressed: _togglePlayPause,
+                ),
+              ),
+            if (_showControls)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Colors.black.withValues(alpha: 0.7),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                  child: SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: VideoProgressIndicator(
+                        widget.controller,
+                        allowScrubbing: true,
+                        colors: const VideoProgressColors(
+                          playedColor: Colors.white,
+                          bufferedColor: Colors.white30,
+                          backgroundColor: Colors.white10,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
