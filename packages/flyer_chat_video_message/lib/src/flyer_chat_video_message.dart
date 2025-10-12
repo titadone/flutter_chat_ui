@@ -114,8 +114,8 @@ class FlyerChatVideoMessage extends StatefulWidget {
     this.showDownloadButton = true,
     this.onDownloadComplete,
     this.onDownloadError,
-    this.maxWidth = 300,
-    this.maxHeight = 400,
+    this.maxWidth = 150,
+    this.maxHeight = 200,
   });
 
   @override
@@ -127,6 +127,8 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
   bool _isInitialized = false;
   bool _isPlaying = false;
   bool _isDownloading = false;
+  bool _hasError = false;
+  String? _errorMessage;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
@@ -149,12 +151,19 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
         setState(() {
           _isInitialized = true;
           _duration = _videoController!.value.duration;
+          _hasError = false;
         });
 
         _videoController!.addListener(_videoListener);
       }
     } catch (e) {
       debugPrint('Error initializing video: $e');
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _errorMessage = 'Erreur de chargement de la vidéo';
+        });
+      }
     }
   }
 
@@ -329,6 +338,48 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
   }
 
   Widget _buildVideoPlayer(bool isSentByMe, _LocalTheme theme) {
+    // Show error state if video failed to load
+    if (_hasError) {
+      return Container(
+        width: widget.maxWidth,
+        height: widget.maxHeight,
+        color: Colors.black87,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                color: Colors.white,
+                size: 40,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage ?? 'Erreur de chargement',
+                style: const TextStyle(color: Colors.white),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _hasError = false;
+                    _isInitialized = false;
+                  });
+                  _initializeVideo();
+                },
+                child: const Text(
+                  'Réessayer',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Show loading state
     if (!_isInitialized || _videoController == null) {
       return Container(
         width: widget.maxWidth,
@@ -341,10 +392,10 @@ class _FlyerChatVideoMessageState extends State<FlyerChatVideoMessage> {
     }
 
     final videoAspectRatio = _videoController!.value.aspectRatio;
-    final videoWidth = widget.maxWidth ?? 300;
+    final videoWidth = widget.maxWidth ?? 150;
     final videoHeight = videoWidth / videoAspectRatio;
-    final constrainedHeight = videoHeight > (widget.maxHeight ?? 400)
-        ? widget.maxHeight ?? 400
+    final constrainedHeight = videoHeight > (widget.maxHeight ?? 200)
+        ? widget.maxHeight ?? 200
         : videoHeight;
 
     return GestureDetector(
